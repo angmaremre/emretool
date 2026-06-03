@@ -1,0 +1,16 @@
+# Sanal ortam
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

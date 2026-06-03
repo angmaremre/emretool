@@ -1,0 +1,243 @@
+"""Tek bir aktif MySQL bağlantısının çalışma alanı.
+
+Sol: schema tree (databases → tables → columns, lazy yükleme).
+Sağ: SQL editör + read-only sorgu sonuç tablosu.
+Tüm IO işleri arka plan thread'inde çalışır; UI donmaz.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.core.db_agent import MySQLAgent, QueryResult
+from app.models.connection_profile import ConnectionProfile
+from app.services.worker import run_in_background
+
+_NODE_ROLE = Qt.ItemDataRole.UserRole       # ("db", name) | ("table", db, table) | ("loading",)
+
+
+class DbConnectionTab(QWidget):
+    def __init__(
+        self,
+        agent: MySQLAgent,
+        profile: ConnectionProfile,
+        threadpool,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._agent = agent
+        self._profile = profile
+        self._pool = threadpool
+        self._running = False
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(splitter)
+
+        # --- sol: schema tree ---
+        self._tree = QTreeWidget()
+        self._tree.setHeaderLabel("Şema")
+        self._tree.itemExpanded.connect(self._on_item_expanded)
+        self._tree.itemDoubleClicked.connect(self._on_tree_double_clicked)
+        splitter.addWidget(self._tree)
+
+        # --- sağ: editör + sonuç ---
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        toolbar = QHBoxLayout()
+        self._run_btn = QPushButton("▶ Çalıştır")
+        self._run_btn.clicked.connect(self._run_query)
+        toolbar.addWidget(self._run_btn)
+        toolbar.addWidget(QLabel("Maks satır:"))
+        self._max_rows = QSpinBox()
+        self._max_rows.setRange(1, 100000)
+        self._max_rows.setValue(1000)
+        toolbar.addWidget(self._max_rows)
+        toolbar.addStretch(1)
+        self._status = QLabel("Read-only · hazır")
+        self._status.setObjectName("PanelLabel")
+        toolbar.addWidget(self._status)
+        right_layout.addLayout(toolbar)
+
+        right_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._editor = QPlainTextEdit()
+        self._editor.setPlaceholderText("SELECT * FROM ...   (Ctrl+Enter ile çalıştır)")
+        right_splitter.addWidget(self._editor)
+        self._result = QTableWidget()
+        self._result.setAlternatingRowColors(True)
+        self._result.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        right_splitter.addWidget(self._result)
+        right_splitter.setSizes([180, 360])
+        right_layout.addWidget(right_splitter, 1)
+
+        splitter.addWidget(right)
+        splitter.setSizes([260, 720])
+
+        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._run_query)
+        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._run_query)
+
+        self._load_databases()
+
+    # --- schema tree ---
+
+    def _load_databases(self) -> None:
+        self._status.setText("Şema yükleniyor…")
+
+        def done(dbs):
+            self._tree.clear()
+            for db in dbs:
+                item = QTreeWidgetItem([db])
+                item.setData(0, _NODE_ROLE, ("db", db))
+                self._add_loading_child(item)
+                self._tree.addTopLevelItem(item)
+            self._status.setText("Read-only · hazır")
+            default_db = self._profile.extra.get("database")
+            if default_db:
+                self._expand_db(default_db)
+
+        run_in_background(
+            self._pool, self._agent.list_databases,
+            on_result=done, on_error=self._show_error,
+        )
+
+    def _expand_db(self, db_name: str) -> None:
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            if item.data(0, _NODE_ROLE) == ("db", db_name):
+                item.setExpanded(True)
+                break
+
+    def _add_loading_child(self, parent: QTreeWidgetItem) -> None:
+        loading = QTreeWidgetItem(["yükleniyor…"])
+        loading.setData(0, _NODE_ROLE, ("loading",))
+        parent.addChild(loading)
+
+    def _is_unloaded(self, item: QTreeWidgetItem) -> bool:
+        return (
+            item.childCount() == 1
+            and item.child(0).data(0, _NODE_ROLE) == ("loading",)
+        )
+
+    def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
+        if not self._is_unloaded(item):
+            return
+        node = item.data(0, _NODE_ROLE)
+        if node[0] == "db":
+            self._load_tables(item, node[1])
+        elif node[0] == "table":
+            self._load_columns(item, node[1], node[2])
+
+    def _load_tables(self, db_item: QTreeWidgetItem, db: str) -> None:
+        def done(tables):
+            db_item.takeChildren()
+            for t in tables:
+                child = QTreeWidgetItem([t])
+                child.setData(0, _NODE_ROLE, ("table", db, t))
+                self._add_loading_child(child)
+                db_item.addChild(child)
+
+        run_in_background(
+            self._pool, self._agent.list_tables,
+            args=(db,), on_result=done, on_error=self._show_error,
+        )
+
+    def _load_columns(self, table_item: QTreeWidgetItem, db: str, table: str) -> None:
+        def done(columns):
+            table_item.takeChildren()
+            for col in columns:
+                label = f"{col.name}  ·  {col.type}"
+                if col.key == "PRI":
+                    label += "  🔑"
+                child = QTreeWidgetItem([label])
+                child.setData(0, _NODE_ROLE, ("column", db, table, col.name))
+                table_item.addChild(child)
+
+        run_in_background(
+            self._pool, self._agent.get_columns,
+            args=(db, table), on_result=done, on_error=self._show_error,
+        )
+
+    def _on_tree_double_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
+        node = item.data(0, _NODE_ROLE)
+        if node and node[0] == "table":
+            _, db, table = node
+            self._editor.setPlainText(f"SELECT * FROM `{db}`.`{table}` LIMIT 100")
+            self._run_query()
+
+    # --- sorgu çalıştırma ---
+
+    def _run_query(self) -> None:
+        if self._running:
+            return
+        sql = self._editor.toPlainText().strip()
+        if not sql:
+            return
+        self._running = True
+        self._run_btn.setEnabled(False)
+        self._status.setText("Çalışıyor…")
+
+        def done(result: QueryResult):
+            self._populate_result(result)
+
+        def finished():
+            self._running = False
+            self._run_btn.setEnabled(True)
+
+        run_in_background(
+            self._pool, self._agent.run_query,
+            args=(sql, self._max_rows.value()),
+            on_result=done, on_error=self._show_query_error, on_finished=finished,
+        )
+
+    def _populate_result(self, result: QueryResult) -> None:
+        self._result.clear()
+        self._result.setColumnCount(len(result.columns))
+        self._result.setHorizontalHeaderLabels(result.columns)
+        self._result.setRowCount(len(result.rows))
+        for r, row in enumerate(result.rows):
+            for c, value in enumerate(row):
+                text = "NULL" if value is None else str(value)
+                self._result.setItem(r, c, QTableWidgetItem(text))
+        self._result.resizeColumnsToContents()
+
+        status = f"{result.rowcount} satır · {result.execution_ms:.0f} ms"
+        if result.truncated:
+            status += f" · ilk {self._max_rows.value()} (kesildi)"
+        self._status.setText(status)
+
+    # --- hata gösterimi ---
+
+    def _show_error(self, exc: Exception) -> None:
+        self._status.setText("Hata")
+        QMessageBox.critical(self, "Hata", str(exc))
+
+    def _show_query_error(self, exc: Exception) -> None:
+        self._status.setText("Sorgu hatası")
+        QMessageBox.critical(self, "Sorgu hatası", str(exc))
+
+    # --- yaşam döngüsü ---
+
+    def close_agent(self) -> None:
+        self._agent.close()

@@ -6,9 +6,14 @@ sonuç sinyaller aracılığıyla UI thread'ine güvenle geri döner.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Set
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, pyqtSlot
+
+# Çalışan worker'ları referansta tutar. Aksi halde run_in_background'ın dönüş
+# değeri tutulmadığında Python GC, queued sinyaller UI thread'ine ulaşmadan
+# WorkerSignals'ı toplayabilir → macOS'ta segfault. İş bitince çıkarılır.
+_active_workers: "Set[Worker]" = set()
 
 
 class WorkerSignals(QObject):
@@ -55,5 +60,8 @@ def run_in_background(
         worker.signals.error.connect(on_error)
     if on_finished is not None:
         worker.signals.finished.connect(on_finished)
+    # İş tamamen bitene kadar referansı koru (GC kaynaklı segfault'u önler).
+    _active_workers.add(worker)
+    worker.signals.finished.connect(lambda: _active_workers.discard(worker))
     pool.start(worker)
     return worker

@@ -94,6 +94,39 @@ class SchemaCopier:
             emit("mysqldump/mysql bulunamadı — Python yöntemine geçiliyor (daha yavaş).")
             self._run_python(emit)
 
+    # --- ortak yardımcılar ---
+
+    def _source_charset_collation(self) -> Tuple[str, Optional[str]]:
+        """Kaynak şemanın varsayılan charset/collation'ını okur (yoksa utf8mb4)."""
+        conn, tun = _open_conn(self._source_cfg)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT default_character_set_name, default_collation_name "
+                    "FROM information_schema.schemata WHERE schema_name = %s",
+                    (self._source_schema,),
+                )
+                row = cur.fetchone()
+            if row and row[0]:
+                return row[0], row[1]
+            return "utf8mb4", None
+        finally:
+            self._safe_close(conn, tun)
+
+    def _create_db_sql(self, charset: str, collation: Optional[str]) -> str:
+        """Hedef şemayı kaynakla aynı charset/collation ile oluşturan SQL.
+
+        charset/collation değerleri sunucunun information_schema'sından gelir
+        (güvenilir), bu yüzden doğrudan kullanılır.
+        """
+        sql = (
+            f"CREATE DATABASE IF NOT EXISTS `{self._target_schema}` "
+            f"CHARACTER SET {charset}"
+        )
+        if collation:
+            sql += f" COLLATE {collation}"
+        return sql
+
     # --- en hızlı yöntem: mysqldump | mysql ---
 
     def _run_mysqldump(self, emit: ProgressFn, dump_bin: str, mysql_bin: str) -> None:
@@ -106,10 +139,11 @@ class SchemaCopier:
             t_cnf = self._write_defaults(self._target_cfg, t_host, t_port)
 
             emit("Hedef şema hazırlanıyor…")
-            self._mysql_exec(
-                mysql_bin, t_cnf,
-                f"CREATE DATABASE IF NOT EXISTS `{self._target_schema}` "
-                f"CHARACTER SET utf8mb4",
+            charset, collation = self._source_charset_collation()
+            self._mysql_exec(mysql_bin, t_cnf, self._create_db_sql(charset, collation))
+            emit(
+                f"Hedef şema '{self._target_schema}' hazır "
+                f"(charset={charset}{', ' + collation if collation else ''})."
             )
 
             dump_cmd = [
@@ -201,11 +235,9 @@ class SchemaCopier:
             tables = self._list_base_tables(sconn)
             emit(f"{len(tables)} tablo bulundu.")
 
+            charset, collation = self._source_charset_collation()
             with tconn.cursor() as cur:
-                cur.execute(
-                    f"CREATE DATABASE IF NOT EXISTS `{self._target_schema}` "
-                    f"CHARACTER SET utf8mb4"
-                )
+                cur.execute(self._create_db_sql(charset, collation))
                 cur.execute(f"USE `{self._target_schema}`")
                 cur.execute("SET FOREIGN_KEY_CHECKS=0")
                 cur.execute("SET UNIQUE_CHECKS=0")

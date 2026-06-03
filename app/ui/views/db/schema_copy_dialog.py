@@ -42,6 +42,7 @@ class SchemaCopyDialog(QDialog):
         super().__init__(parent)
         self._storage = storage
         self._running = False
+        self._progress_relay: Optional[_CopyProgress] = None
         self.setWindowTitle("Schema Kopyala")
         self.setMinimumWidth(560)
 
@@ -167,14 +168,60 @@ class SchemaCopyDialog(QDialog):
             )
             return
 
-        confirm = QMessageBox.question(
-            self,
-            "Onay",
-            f"'{source.name}' → '{source_schema}' şeması\n"
-            f"'{target.name}' → '{target_schema}' hedefine "
-            f"{'veriyle' if self._include_data.isChecked() else 'şema olarak'} "
-            f"kopyalanacak.\n\nHedefte aynı isimli tablolar DROP edilecek. Devam?",
+        # Onaydan önce: hedefte aynı isimli şema zaten var mı? (arka planda)
+        self._copy_btn.setEnabled(False)
+        self._log.appendPlainText("Hedef bağlantı kontrol ediliyor…")
+        agent = MySQLAgent(build_mysql_config(target))
+
+        def check():
+            agent.connect()
+            return agent.list_databases()
+
+        def done(dbs):
+            agent.close()
+            self._copy_btn.setEnabled(True)
+            self._confirm_and_run(
+                source, target, source_schema, target_schema,
+                target_exists=target_schema in dbs,
+            )
+
+        def err(exc: Exception):
+            agent.close()
+            self._copy_btn.setEnabled(True)
+            QMessageBox.critical(
+                self, "Hata", f"Hedef bağlantı kontrol edilemedi:\n{exc}"
+            )
+
+        run_in_background(
+            QThreadPool.globalInstance(), check, on_result=done, on_error=err
         )
+
+    def _confirm_and_run(
+        self,
+        source: ConnectionProfile,
+        target: ConnectionProfile,
+        source_schema: str,
+        target_schema: str,
+        target_exists: bool,
+    ) -> None:
+        mode = "veriyle" if self._include_data.isChecked() else "şema olarak"
+        msg = (
+            f"'{source.name}' → '{source_schema}' şeması\n"
+            f"'{target.name}' → '{target_schema}' hedefine {mode} kopyalanacak.\n\n"
+        )
+        if target_exists:
+            msg += (
+                f"⚠️ DİKKAT: Hedefte '{target_schema}' şeması ZATEN VAR. "
+                "Aynı isimli tablolar DROP edilip üzerine yazılacak; "
+                "mevcut veriler kaybolabilir.\n\nYine de devam edilsin mi?"
+            )
+        else:
+            msg += (
+                f"Hedefte '{target_schema}' şeması yok; kaynakla aynı "
+                "charset/collation ile oluşturulacak. Devam?"
+            )
+
+        confirm = QMessageBox.question(self, "Onay", msg)
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
@@ -186,7 +233,11 @@ class SchemaCopyDialog(QDialog):
             include_data=self._include_data.isChecked(),
         )
 
+        # progress'i instance attribute olarak sakla: aksi halde fonksiyon
+        # dönünce GC bu QObject'i toplar ve worker thread dangling bir sinyali
+        # emit ederken segfault olur.
         progress = _CopyProgress()
+        self._progress_relay = progress
         progress.message.connect(self._log.appendPlainText)
 
         self._running = True

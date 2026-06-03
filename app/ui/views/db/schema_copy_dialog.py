@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from PyQt6.QtCore import QObject, Qt, QThreadPool, pyqtSignal
@@ -244,6 +245,7 @@ class SchemaCopyDialog(QDialog):
         self._copy_btn.setEnabled(False)
         self._progress.setRange(0, 0)   # belirsiz (çalışıyor)
         self._log.appendPlainText("— Kopyalama başladı —")
+        started = time.perf_counter()
 
         def err(exc: Exception):
             self._log.appendPlainText(f"HATA: {exc}")
@@ -254,6 +256,13 @@ class SchemaCopyDialog(QDialog):
             self._copy_btn.setEnabled(True)
             self._progress.setRange(0, 1)
             self._progress.setValue(1)
+            elapsed = time.perf_counter() - started
+            if elapsed >= 60:
+                self._log.appendPlainText(
+                    f"Toplam süre: {int(elapsed // 60)} dk {elapsed % 60:.1f} sn"
+                )
+            else:
+                self._log.appendPlainText(f"Toplam süre: {elapsed:.1f} sn")
 
         run_in_background(
             QThreadPool.globalInstance(),

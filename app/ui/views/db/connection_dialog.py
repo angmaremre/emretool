@@ -27,6 +27,7 @@ from app.services import secrets
 from app.services.storage import Storage
 from app.services.worker import run_in_background
 from app.ui.views.db.profile_config import MODULE, ssh_account
+from app.ui.widgets.fields import PasswordField
 
 
 class ConnectionDialog(QDialog):
@@ -42,20 +43,20 @@ class ConnectionDialog(QDialog):
         self.saved_profile: Optional[ConnectionProfile] = None
 
         self.setWindowTitle("Bağlantı Düzenle" if profile else "Yeni Bağlantı")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(540)
 
         root = QVBoxLayout(self)
 
         # --- MySQL alanları ---
         form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._name = QLineEdit()
         self._host = QLineEdit("localhost")
         self._port = QSpinBox()
         self._port.setRange(1, 65535)
         self._port.setValue(3306)
         self._user = QLineEdit("root")
-        self._password = QLineEdit()
-        self._password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password = PasswordField()
         self._database = QLineEdit()
         self._database.setPlaceholderText("(opsiyonel varsayılan şema)")
 
@@ -73,13 +74,13 @@ class ConnectionDialog(QDialog):
 
         self._ssh_group = QGroupBox("SSH ayarları")
         ssh_form = QFormLayout(self._ssh_group)
+        ssh_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._ssh_host = QLineEdit()
         self._ssh_port = QSpinBox()
         self._ssh_port.setRange(1, 65535)
         self._ssh_port.setValue(22)
         self._ssh_user = QLineEdit()
-        self._ssh_password = QLineEdit()
-        self._ssh_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ssh_password = PasswordField()
 
         pkey_row = QHBoxLayout()
         self._ssh_pkey = QLineEdit()

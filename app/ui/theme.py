@@ -5,13 +5,44 @@ Tema seçimi SQLite ayarlarında saklanır ve uygulama açılışında geri yük
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Tuple
 
 from PyQt6.QtWidgets import QApplication
 
 from app.services.storage import Storage
+from app.utils.paths import app_data_dir
 
 SETTING_KEY = "ui.theme"
+
+
+def _close_icon_svg(color: str) -> str:
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" '
+        'viewBox="0 0 12 12">'
+        f'<line x1="3" y1="3" x2="9" y2="9" stroke="{color}" '
+        'stroke-width="1.6" stroke-linecap="round"/>'
+        f'<line x1="9" y1="3" x2="3" y2="9" stroke="{color}" '
+        'stroke-width="1.6" stroke-linecap="round"/></svg>'
+    )
+
+
+def _write_close_icons(p: Dict[str, str]) -> Tuple[str, str]:
+    """Tema rengine uygun sekme-kapat (×) ikonlarını yazar; (normal, hover) yol döndürür.
+
+    Qt QSS varsayılan kapat butonunu açık temada beyaz/görünmez çizebiliyor;
+    kendi SVG'mizi üretip rengini palete göre veriyoruz.
+    """
+    try:
+        icons_dir = app_data_dir() / "icons"
+        icons_dir.mkdir(parents=True, exist_ok=True)
+        normal = icons_dir / "tabclose.svg"
+        hover = icons_dir / "tabclose_hover.svg"
+        normal.write_text(_close_icon_svg(p["text_dim"]), encoding="utf-8")
+        hover.write_text(_close_icon_svg(p["accent_hover"]), encoding="utf-8")
+        # QSS forward-slash bekler; macOS yolunda boşluk olabilir → tırnakla.
+        return normal.as_posix(), hover.as_posix()
+    except OSError:
+        return "", ""
 
 DARK: Dict[str, str] = {
     "bg": "#1e1e1e",
@@ -44,7 +75,19 @@ LIGHT: Dict[str, str] = {
 PALETTES = {"dark": DARK, "light": LIGHT}
 
 
-def _build_qss(p: Dict[str, str]) -> str:
+def _build_qss(p: Dict[str, str], close_icon: str = "", close_hover: str = "") -> str:
+    if close_icon:
+        close_qss = f"""
+    QTabBar::close-button {{
+        image: url("{close_icon}");
+        subcontrol-position: right;
+        padding: 2px;
+        margin-left: 6px;
+    }}
+    QTabBar::close-button:hover {{ image: url("{close_hover}"); }}
+    """
+    else:
+        close_qss = ""
     return f"""
     QWidget {{
         background-color: {p['bg']};
@@ -134,6 +177,13 @@ def _build_qss(p: Dict[str, str]) -> str:
         background-color: {p['accent']};
         color: #ffffff;
     }}
+    /* Bağlantı listesi: öğeleri birbirinden ayır (okunabilirlik) */
+    QListWidget::item {{ padding: 6px 5px; }}
+    #ConnTree::item {{
+        padding: 6px 5px;
+        border-bottom: 1px solid {p['border']};
+    }}
+    #ConnTree {{ outline: 0; }}
     QHeaderView::section {{
         background-color: {p['panel_alt']};
         color: {p['text']};
@@ -154,6 +204,7 @@ def _build_qss(p: Dict[str, str]) -> str:
         border-bottom: none;
     }}
     QTabBar::tab:selected {{ background-color: {p['bg']}; color: {p['text']}; }}
+    {close_qss}
 
     /* Çeşitli */
     QSplitter::handle {{ background-color: {p['border']}; }}
@@ -177,7 +228,8 @@ class ThemeManager:
     def apply(self, theme: str) -> None:
         palette = PALETTES.get(theme, DARK)
         self._current = theme if theme in PALETTES else "dark"
-        self._app.setStyleSheet(_build_qss(palette))
+        close_icon, close_hover = _write_close_icons(palette)
+        self._app.setStyleSheet(_build_qss(palette, close_icon, close_hover))
         self._storage.set_setting(SETTING_KEY, self._current)
 
     def toggle(self) -> str:

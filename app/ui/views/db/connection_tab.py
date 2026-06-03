@@ -192,9 +192,14 @@ class DbConnectionTab(QWidget):
             tab.run()
 
     def _close_query(self, index: int) -> None:
+        widget = self._query_tabs.widget(index)
         self._query_tabs.removeTab(index)
+        if widget is not None:
+            widget.deleteLater()
+        # Tüm sekmeler kapandıysa sayacı sıfırla; sonraki sorgu "Sorgu 1"den başlar
+        # (eskiden son sekme kapatılınca otomatik yenisi açılıp no sürekli artıyordu).
         if self._query_tabs.count() == 0:
-            self.open_query(autorun=False)   # en az bir sekme kalsın
+            self._query_counter = 0
 
     # --- schema tree ---
 

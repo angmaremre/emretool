@@ -53,6 +53,9 @@ class ElasticConnectionDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._name = QLineEdit()
         self._host = QLineEdit("localhost")
+        self._host.setToolTip(
+            "Sade ad (localhost), host:port veya tam URL (https://host:9243) yazabilirsiniz."
+        )
         self._port = QSpinBox()
         self._port.setRange(1, 65535)
         self._port.setValue(9200)

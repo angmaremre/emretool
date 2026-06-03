@@ -10,11 +10,34 @@ import json
 import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from elasticsearch import Elasticsearch
 
 from app.core.base_agent import BaseAgent
 from app.core.db_agent import SSHConfig, open_tunnel
+
+
+def normalize_endpoint(scheme: str, host: str, port: int) -> Tuple[str, str, int]:
+    """Host alanını esnek biçimde çözer.
+
+    Kullanıcı Host'a sade ad ("localhost"), "host:port" ya da tam URL
+    ("https://host:9243") yazabilir. Bunların hepsini (scheme, host, port)
+    üçlüsüne indirger; aksi halde elasticsearch istemcisi
+    "URL must include a 'scheme', 'host', and 'port'" hatası verir.
+    """
+    host = (host or "").strip().rstrip("/")
+    if "://" in host:
+        parsed = urlparse(host)
+        scheme = parsed.scheme or scheme
+        if parsed.port:
+            port = parsed.port
+        host = parsed.hostname or ""
+    elif host.count(":") == 1 and not host.startswith("["):
+        h, _, p = host.partition(":")
+        if p.isdigit():
+            host, port = h, int(p)
+    return (scheme or "http"), host, int(port or 9200)
 
 
 @dataclass
@@ -40,12 +63,16 @@ class ElasticAgent(BaseAgent):
 
     def connect(self) -> None:
         cfg = self._config
-        host, port = cfg.host, cfg.port
+        scheme, host, port = normalize_endpoint(cfg.scheme, cfg.host, cfg.port)
+        if not host:
+            raise ValueError(
+                "Host boş olamaz (örn. 'localhost' veya 'https://host:9200')."
+            )
         if cfg.ssh is not None:
             self._tunnel = open_tunnel(cfg.ssh, host, port)
             host, port = "127.0.0.1", self._tunnel.local_bind_port
 
-        url = f"{cfg.scheme}://{host}:{port}"
+        url = f"{scheme}://{host}:{port}"
         basic_auth = (cfg.username, cfg.password or "") if cfg.username else None
         client = Elasticsearch(
             url,

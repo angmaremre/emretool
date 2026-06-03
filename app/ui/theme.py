@@ -127,8 +127,12 @@ def _build_qss(p: Dict[str, str]) -> str:
         alternate-background-color: {p['panel_alt']};
         border: 1px solid {p['border']};
         gridline-color: {p['border']};
-        selection-background-color: {p['selection']};
+        selection-background-color: {p['accent']};
         selection-color: #ffffff;
+    }}
+    QListWidget::item:selected, QTreeView::item:selected, QTableView::item:selected {{
+        background-color: {p['accent']};
+        color: #ffffff;
     }}
     QHeaderView::section {{
         background-color: {p['panel_alt']};
@@ -165,7 +169,7 @@ class ThemeManager:
     def __init__(self, app: QApplication, storage: Storage) -> None:
         self._app = app
         self._storage = storage
-        self._current = storage.get_setting(SETTING_KEY, "dark") or "dark"
+        self._current = storage.get_setting(SETTING_KEY, "light") or "light"
 
     def current_theme(self) -> str:
         return self._current

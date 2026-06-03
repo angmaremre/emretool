@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from PyQt6.QtCore import QThreadPool
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -13,15 +14,18 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from app.core.db_agent import MySQLAgent, MySQLConfig, SSHConfig
 from app.models.connection_profile import ConnectionProfile
 from app.services import secrets
 from app.services.storage import Storage
+from app.services.worker import run_in_background
 from app.ui.views.db.profile_config import MODULE, ssh_account
 
 
@@ -102,6 +106,10 @@ class ConnectionDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        self._test_btn = QPushButton("Bağlantıyı test et")
+        self._test_btn.setObjectName("Ghost")
+        self._test_btn.clicked.connect(self._test)
+        buttons.addButton(self._test_btn, QDialogButtonBox.ButtonRole.ActionRole)
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
@@ -113,6 +121,51 @@ class ConnectionDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self, "Private key seç")
         if path:
             self._ssh_pkey.setText(path)
+
+    def _config_from_form(self) -> MySQLConfig:
+        """Formdaki anlık değerlerden (kaydetmeden) test için config üretir."""
+        ssh = None
+        if self._use_ssh.isChecked():
+            ssh = SSHConfig(
+                host=self._ssh_host.text().strip(),
+                port=self._ssh_port.value(),
+                username=self._ssh_user.text().strip(),
+                password=self._ssh_password.text() or None,
+                pkey_path=self._ssh_pkey.text().strip() or None,
+            )
+        return MySQLConfig(
+            host=self._host.text().strip() or "localhost",
+            port=self._port.value(),
+            username=self._user.text().strip(),
+            password=self._password.text(),
+            database=self._database.text().strip() or None,
+            ssh=ssh,
+        )
+
+    def _test(self) -> None:
+        agent = MySQLAgent(self._config_from_form())
+        self._test_btn.setEnabled(False)
+        self._test_btn.setText("Test ediliyor…")
+
+        def ok(_result):
+            agent.close()
+            QMessageBox.information(self, "Bağlantı testi", "Bağlantı başarılı ✓")
+
+        def err(exc: Exception):
+            agent.close()
+            QMessageBox.critical(self, "Bağlantı testi", f"Bağlanılamadı:\n{exc}")
+
+        def finished():
+            self._test_btn.setEnabled(True)
+            self._test_btn.setText("Bağlantıyı test et")
+
+        run_in_background(
+            QThreadPool.globalInstance(),
+            agent.connect,
+            on_result=ok,
+            on_error=err,
+            on_finished=finished,
+        )
 
     def _load(self, profile: ConnectionProfile) -> None:
         self._name.setText(profile.name)

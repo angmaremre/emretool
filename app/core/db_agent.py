@@ -11,6 +11,7 @@ ayrılmış) reddedilir.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
@@ -95,6 +96,9 @@ class MySQLAgent(BaseAgent):
         self._config = config
         self._conn: Optional[pymysql.connections.Connection] = None
         self._tunnel = None  # SSHTunnelForwarder
+        # pymysql bağlantısı thread-safe değildir; tek bağlantıya eşzamanlı erişimi
+        # (şema yükleme + sorgu) bu kilitle sıraya sokarız.
+        self._lock = threading.RLock()
 
     # --- bağlantı yaşam döngüsü ---
 
@@ -105,7 +109,7 @@ class MySQLAgent(BaseAgent):
         if cfg.ssh is not None:
             host, port = self._open_tunnel(cfg, host, port)
 
-        self._conn = pymysql.connect(
+        conn = pymysql.connect(
             host=host,
             port=port,
             user=cfg.username,
@@ -118,11 +122,14 @@ class MySQLAgent(BaseAgent):
         )
         # Oturumu sunucu tarafında salt-okunur işaretle (ek güvenlik katmanı).
         try:
-            with self._conn.cursor() as cur:
+            with conn.cursor() as cur:
                 cur.execute("SET SESSION TRANSACTION READ ONLY")
         except pymysql.MySQLError:
             # Bazı MySQL türevleri desteklemeyebilir; istemci tarafı doğrulama yine geçerli.
             pass
+
+        with self._lock:
+            self._conn = conn
 
     def _open_tunnel(self, cfg: MySQLConfig, host: str, port: int) -> tuple[str, int]:
         from sshtunnel import SSHTunnelForwarder
@@ -139,28 +146,30 @@ class MySQLAgent(BaseAgent):
         return "127.0.0.1", self._tunnel.local_bind_port
 
     def close(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except pymysql.MySQLError:
-                pass
-            self._conn = None
-        if self._tunnel is not None:
-            try:
-                self._tunnel.stop()
-            except Exception:  # noqa: BLE001
-                pass
-            self._tunnel = None
+        with self._lock:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except pymysql.MySQLError:
+                    pass
+                self._conn = None
+            if self._tunnel is not None:
+                try:
+                    self._tunnel.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._tunnel = None
 
     @property
     def is_connected(self) -> bool:
-        if self._conn is None:
-            return False
-        try:
-            self._conn.ping(reconnect=False)
-            return True
-        except pymysql.MySQLError:
-            return False
+        with self._lock:
+            if self._conn is None:
+                return False
+            try:
+                self._conn.ping(reconnect=False)
+                return True
+            except pymysql.MySQLError:
+                return False
 
     # --- schema introspection ---
 
@@ -216,13 +225,14 @@ class MySQLAgent(BaseAgent):
                 "Yalnızca read-only sorgulara izin verilir "
                 "(SELECT, SHOW, DESCRIBE, EXPLAIN, WITH)."
             )
-        conn = self._require_conn()
-        start = time.perf_counter()
-        with conn.cursor() as cur:
-            cur.execute(normalize_sql(sql))
-            columns = [d[0] for d in cur.description] if cur.description else []
-            fetched = cur.fetchmany(max_rows + 1)
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        with self._lock:
+            conn = self._require_conn()
+            start = time.perf_counter()
+            with conn.cursor() as cur:
+                cur.execute(normalize_sql(sql))
+                columns = [d[0] for d in cur.description] if cur.description else []
+                fetched = cur.fetchmany(max_rows + 1)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
 
         truncated = len(fetched) > max_rows
         rows = list(fetched[:max_rows])
@@ -242,7 +252,8 @@ class MySQLAgent(BaseAgent):
         return self._conn
 
     def _fetch_all(self, sql: str, params: tuple = ()) -> List[tuple]:
-        conn = self._require_conn()
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            return list(cur.fetchall())
+        with self._lock:
+            conn = self._require_conn()
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                return list(cur.fetchall())

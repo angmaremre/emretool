@@ -21,6 +21,7 @@ from app.services import secrets
 from app.services.storage import Storage
 from app.ui.views.db.connection_dialog import ConnectionDialog
 from app.ui.views.db.profile_config import MODULE, ssh_account
+from app.ui.views.db.schema_copy_dialog import SchemaCopyDialog
 
 _PROFILE_ROLE = Qt.ItemDataRole.UserRole
 
@@ -62,6 +63,11 @@ class ConnectionListPanel(QWidget):
         row2.addWidget(edit_btn)
         row2.addWidget(del_btn)
         layout.addLayout(row2)
+
+        copy_btn = QPushButton("⇄  Schema Kopyala")
+        copy_btn.setObjectName("Ghost")
+        copy_btn.clicked.connect(self._open_schema_copy)
+        layout.addWidget(copy_btn)
 
         self.refresh()
 
@@ -111,3 +117,6 @@ class ConnectionListPanel(QWidget):
         profile = self._selected_profile()
         if profile is not None:
             self.connectRequested.emit(profile)
+
+    def _open_schema_copy(self) -> None:
+        SchemaCopyDialog(self._storage, parent=self).exec()

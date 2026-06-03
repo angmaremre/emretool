@@ -91,6 +91,24 @@ class ReadOnlyViolation(Exception):
     """Read-only olmayan bir sorgu çalıştırılmaya çalışıldığında fırlatılır."""
 
 
+def open_tunnel(ssh: SSHConfig, remote_host: str, remote_port: int):
+    """Bir SSH tüneli açar ve başlatılmış SSHTunnelForwarder'ı döndürür.
+
+    Hem read-only agent hem de schema kopyalama (yazılabilir bağlantı) kullanır.
+    """
+    from sshtunnel import SSHTunnelForwarder
+
+    server = SSHTunnelForwarder(
+        (ssh.host, ssh.port),
+        ssh_username=ssh.username,
+        ssh_password=ssh.password or None,
+        ssh_pkey=ssh.pkey_path or None,
+        remote_bind_address=(remote_host, remote_port),
+    )
+    server.start()
+    return server
+
+
 class MySQLAgent(BaseAgent):
     def __init__(self, config: MySQLConfig) -> None:
         self._config = config
@@ -132,17 +150,7 @@ class MySQLAgent(BaseAgent):
             self._conn = conn
 
     def _open_tunnel(self, cfg: MySQLConfig, host: str, port: int) -> tuple[str, int]:
-        from sshtunnel import SSHTunnelForwarder
-
-        ssh = cfg.ssh
-        self._tunnel = SSHTunnelForwarder(
-            (ssh.host, ssh.port),
-            ssh_username=ssh.username,
-            ssh_password=ssh.password or None,
-            ssh_pkey=ssh.pkey_path or None,
-            remote_bind_address=(host, port),
-        )
-        self._tunnel.start()
+        self._tunnel = open_tunnel(cfg.ssh, host, port)
         return "127.0.0.1", self._tunnel.local_bind_port
 
     def close(self) -> None:

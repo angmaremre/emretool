@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.core.module_registry import ModuleDescriptor, ModuleRegistry
 from app.ui.views.db_view import DatabaseView
 from app.ui.views.elastic_view import ElasticView
+from app.ui.views.isbank_view import IsbankView
 from app.ui.views.redis_view import RedisView
 
 
@@ -38,5 +39,14 @@ def register_builtin_modules(registry: ModuleRegistry) -> None:
             icon="🔍",
             order=30,
             view_factory=lambda c: ElasticView(c),
+        )
+    )
+    registry.register(
+        ModuleDescriptor(
+            key="isbank",
+            title="İşbank Sertifika Yönetimi",
+            icon="🔐",
+            order=40,
+            view_factory=lambda c: IsbankView(c),
         )
     )

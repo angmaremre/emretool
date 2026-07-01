@@ -25,7 +25,7 @@ DEFAULTS: Dict[str, Any] = {
         "L": "Istanbul",
         "O": "FLO MAGAZACILIK VE PAZARLAMA ANONIM SIRKETI",
         "OU": "IT",
-        "CN": "flo.com.tr",
+        "CN": "FLO MAGAZACILIK VE PAZARLAMA ANONIM SIRKETI",
     },
     # P12 bölümü
     "p12_cert": "",

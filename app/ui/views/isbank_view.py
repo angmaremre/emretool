@@ -318,6 +318,19 @@ class IsbankView(BaseModuleView):
         if folder:
             project_io.save_notes(folder, self._notes.toPlainText())
 
+    def _confirm_overwrite(self, path: str) -> bool:
+        """Dosya zaten varsa üzerine yazma onayı ister."""
+        if os.path.exists(path):
+            ans = QMessageBox.question(
+                self,
+                "Dosya mevcut",
+                f"'{os.path.basename(path)}' zaten var. Üzerine yazılsın mı?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            return ans == QMessageBox.StandardButton.Yes
+        return True
+
     def _require_folder(self) -> Optional[str]:
         folder = self._folder.text().strip()
         if not folder:
@@ -364,6 +377,8 @@ class IsbankView(BaseModuleView):
         if not p["key_name"]:
             QMessageBox.warning(self, "Eksik", "Key dosya adı boş olamaz.")
             return
+        if not self._confirm_overwrite(os.path.join(folder, p["key_name"])):
+            return
         self._run(
             self._btn_key,
             self._cert.gen_key,
@@ -377,6 +392,11 @@ class IsbankView(BaseModuleView):
             return
         p = self._collect_params()
         self._persist_params()
+        if not p["csr_name"]:
+            QMessageBox.warning(self, "Eksik", "CSR dosya adı boş olamaz.")
+            return
+        if not self._confirm_overwrite(os.path.join(folder, p["csr_name"])):
+            return
         self._run(
             self._btn_csr,
             self._cert.gen_csr,
@@ -435,6 +455,8 @@ class IsbankView(BaseModuleView):
         if not p["p12_cert"] or not p["p12_key"] or not out_path:
             QMessageBox.warning(self, "Eksik", "Sertifika, key ve çıktı adı zorunlu.")
             return
+        if not self._confirm_overwrite(out_path):
+            return
         self._run(
             self._btn_p12,
             self._cert.export_p12,
@@ -454,6 +476,8 @@ class IsbankView(BaseModuleView):
         out_path = os.path.join(folder, p["ts_out"]) if p["ts_out"] else ""
         if not p["ts_pem"] or not out_path or not p["ts_alias"]:
             QMessageBox.warning(self, "Eksik", "PEM, çıktı adı ve alias zorunlu.")
+            return
+        if not self._confirm_overwrite(out_path):
             return
         self._run(
             self._btn_ts,
